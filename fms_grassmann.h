@@ -1,5 +1,6 @@
 // fms_grassmann.h - Grassmann algebra
 #pragma once
+#include <algorithm>
 #include <bit>
 #include <bitset>
 #include <concepts>
@@ -10,20 +11,160 @@
 
 namespace fms::grassmann {
 
-	template<class I>
-	inline auto less = [](I i, I j)
+	template<std::size_t N>
+	inline bool operator<(const std::bitset<N>& i, const std::bitset<N>& j)
 	{
-		auto pi = std::popcount(i);
-		auto pj = std::popcount(j);
+		static_assert(N <= 8 * sizeof(unsigned long long));
 
-		return pi < pj || pi == pj && i < j;
+		return i.to_ullong() < j.to_ullong();
 	};
+	template<std::size_t N>
+	inline auto less = [](const std::bitset<N>& i, const std::bitset<N>& j) { return i < j; };
 
-	template<typename I = uint64_t, typename A = double>
-	using element = std::map<I, A, decltype(less<I>)>;
+	// total number of permutations
+	template<std::size_t N>
+	inline int perm(const std::bitset<N>& i, std::bitset<N> j)
+	{
+		int s = 0;
 
-	template<typename I = uint64_t, typename A = double>
-	inline element<I, A>& trim(element<I, A>& e)
+		unsigned long long ui = i.to_ullong(), uj = j.to_ullong();
+
+		for (auto k = std::bit_floor(uj); 0 != std::popcount(k); k = std::bit_floor(uj)) {
+			s += std::popcount(ui & (k - 1));
+			uj &= ~k;
+		}
+
+		return s;
+	}
+	template<std::size_t N>
+	inline int sign(const std::bitset<N>& i, std::bitset<N> j)
+	{
+		return perm(i, j) & 1 ? -1 : 1;
+	}
+
+	// weighted single polyhedron
+	template<std::size_t N, typename A>
+		requires std::is_arithmetic_v<A>
+	using blade = std::pair<std::bitset<N>, A>;
+
+	// unary minus
+	template<std::size_t N, typename A>
+		requires std::is_arithmetic_v<A>
+	inline blade<N,A>& operator-(blade<N,A>& b)
+	{
+		b.second = -b.second;
+
+		return b;
+	}
+
+	// scalar multiplication
+	template<std::size_t N, typename A, typename B>
+		requires std::is_arithmetic_v<A> && std::is_arithmetic_v<B>
+	inline blade<N, A> operator*(const blade<N, A>& a, const B& b)
+	{
+		return blade<N, A>({ a.first, a.second * b });
+	}
+	template<std::size_t N, typename A, typename B>
+		requires std::is_arithmetic_v<A> && std::is_arithmetic_v<B>
+	inline blade<N, A> operator*(const B& b, const blade<N, A>& a)
+	{
+		return a * b;
+	}
+
+	// scalar right division
+	template<std::size_t N, typename A, typename B>
+		requires std::is_arithmetic_v<A> && std::is_arithmetic_v<B>
+	inline blade<N, A> operator/(const blade<N, A>& a, const B& b)
+	{
+		return blade<N, A>({ a.first, a.second/b });
+	}
+	// division of compatible polyhedra
+	template<std::size_t N, typename A>
+		requires std::is_arithmetic_v<A>
+	inline A operator/(const blade<N, A>& a, const blade<N, A>& b)
+	{
+		return a.first == b.first ? a.second / b.second : std::numeric_limits<A>::quiet_NaN();
+	}
+
+	// progressive product
+	template<std::size_t N, typename A>
+		requires std::is_arithmetic_v<A>
+	inline blade<N, A> operator|(const blade<N, A>& a, const blade<N, A>& b)
+	{
+		return (a.first & b.first) 
+			? blade<N, A>{} 
+			: blade<N, A>({ a.first | b.first, sign(a.first, b.first) * a.second * b.second });
+	}
+
+	// regressive product !!! sign is probably not right
+	template<std::size_t N, typename A>
+		requires std::is_arithmetic_v<A>
+	inline blade<N, A> operator&(const blade<N, A>& a, const blade<N, A>& b)
+	{
+		return (a.first & b.first)
+			? blade<N, A>({ a.first & b.first, sign(a.first, b.first) * a.second * b.second })
+			: blade<N, A>{};
+	}
+
+	template<std::size_t N, typename A = double>
+		requires std::is_arithmetic_v<A>
+	using element = std::map<std::bitset<N>, A, decltype(less<N>)>;
+	
+	// unary minus
+	template<std::size_t N, typename A = double>
+		requires std::is_arithmetic_v<A>
+	element<N,A>& operator-(element<N,A>& e)
+	{
+		std::for_each(e.begin(), e.end(), [](blade<N, A>& b) { b.second = -b.second; });
+
+		return e;
+	}
+	template<std::size_t N, typename A = double>
+		requires std::is_arithmetic_v<A>
+	element<N, A> operator-(element<N, A> e)
+	{
+		return -e;
+	}
+
+	template<std::size_t N, typename A = double>
+			requires std::is_arithmetic_v<A>
+	inline element<N,A>& operator+(element<N, A>& a, const blade<N,A>& b)
+	{
+		a[b.first] += b.second;
+
+		return a;
+	}
+	template<std::size_t N, typename A = double>
+		requires std::is_arithmetic_v<A>
+	inline element<N, A> operator+(const element<N, A>& a, const blade<N, A>& b)
+	{
+		return a + b;
+	}
+	template<std::size_t N, typename A = double>
+		requires std::is_arithmetic_v<A>
+	inline element<N, A>& operator+(const blade<N, A>& b, element<N, A>& a)
+	{
+		return a + b;
+	}
+	template<std::size_t N, typename A = double>
+		requires std::is_arithmetic_v<A>
+	inline element<N, A>& operator+(element<N, A>& e, const element<N, A>& f)
+	{
+		for (const auto& b : f) {
+			e += b;
+		}
+
+		return e;
+	}
+	template<std::size_t N, typename A = double>
+		requires std::is_arithmetic_v<A>
+	inline element<N, A> operator+(const element<N, A>& e, const element<N, A>& f)
+	{
+		return e + f;
+	}
+
+	template<std::size_t N, typename A = double>
+	inline element<N, A>& trim(element<N, A>& e)
 	{
 		std::erase_if(e, [](const auto& i) { return i.second == 0; });
 
@@ -33,22 +174,21 @@ namespace fms::grassmann {
 
 }
 
-template<typename I, typename A>
-inline std::ostream& operator<<(std::ostream& os, const fms::grassmann::element<I, A>& e)
+template<std::size_t N, typename A>
+inline std::ostream& operator<<(std::ostream& os, const fms::grassmann::element<N, A>& e)
 {
 	for (const auto& [i, a] : e) {
-		os << std::showpos << a << "`" << std::hex << i << " ";
-			//std::bitset<8*sizeof(I)>(i) << ">";
+		os << std::showpos << a << ":" << i << " ";
 	}
 
 	return os;
 }
-
+/*
 // dagger
-template<typename I, typename A>
-inline fms::grassmann::element<I, A> operator~(const fms::grassmann::element<I, A>& e)
+template<std::size_t N, typename A>
+inline fms::grassmann::element<N, A> operator~(const fms::grassmann::element<N, A>& e)
 {
-	fms::grassmann::element<I, A> _e;
+	fms::grassmann::element<N, A> _e;
 
 	for (const auto& [i, a] : e) {
 		_e[~i] = a;
@@ -56,112 +196,4 @@ inline fms::grassmann::element<I, A> operator~(const fms::grassmann::element<I, 
 
 	return _e;
 }
-
-template<typename I, typename A>
-inline fms::grassmann::element<I, A> operator+(fms::grassmann::element<I, A> e, const fms::grassmann::element<I, A>& f)
-{
-	for (const auto& [j, b] : f) {
-		A a = e[j] += b;
-		if (0 == a) {
-			e.erase(j);
-		}
-		
-	}
-
-	return e;
-}
-
-template<typename I, typename A, typename E>
-	requires std::is_arithmetic_v<E>
-inline fms::grassmann::element<I, A> operator*(E e, fms::grassmann::element<I, A> f)
-{
-	for (auto& j : f) {
-		j.second *= e;
-	}
-
-	return f;
-}
-
-template<typename I, typename A, typename F>
-	requires std::is_arithmetic_v<F>
-inline fms::grassmann::element<I, A> operator*(fms::grassmann::element<I, A> e, F f)
-{
-	for (auto& i : e) {
-		i.second *= f;
-	}
-
-	return e;
-}
-
-template<typename I, typename A, typename F>
-	requires std::is_arithmetic_v<F>
-inline fms::grassmann::element<I, A> operator/(fms::grassmann::element<I, A> e, F f)
-{
-	for (auto& i : e) {
-		i.second /= f;
-	}
-
-	return e;
-}
-
-template<typename I, typename A>
-	requires std::is_arithmetic_v<F>
-inline A operator/(const fms::grassmann::element<I, A>& e, const fms::grassmann::element<I, A>& f)
-{
-	A nan = std::numeric_limits<A>::quiet_NaN();
-
-	if (1 != e.size() || 1 != f.size()) {
-		return nan;
-	}
-	const auto& [i, a] = *e.begin();
-	const auto& [j, b] = *f.begin();
-	
-	return i == j ? a / b : nan;
-}
-
-template<typename I, typename A>
-inline fms::grassmann::element<I, A> operator-(fms::grassmann::element<I, A> e, const fms::grassmann::element<I, A>& f)
-{
-	for (const auto& [j, b] : f) {
-		A a = e[j] -= b;
-		if (0 == a) {
-			e.erase(j);
-		}
-	}
-
-	return e;
-}
-
-// progressive product
-template<typename I, typename A>
-inline fms::grassmann::element<I, A> operator|(const fms::grassmann::element<I, A>& e, const fms::grassmann::element<I, A>& f)
-{
-	fms::grassmann::element<I, A> ef;
-
-	for (const auto& [i, a] : e) {
-		for (const auto& [j, b] : f) {
-			if (!(i & j)) {
-				ef[i | j] = a * b;
-			}
-		}
-	}
-
-	return ef;
-}
-
-// regressive product
-template<typename I, typename A>
-inline fms::grassmann::element<I, A> operator&(const fms::grassmann::element<I, A>& e, const fms::grassmann::element<I, A>& f)
-{
-	fms::grassmann::element<I, A> ef;
-
-	for (const auto& [i, a] : e) {
-		for (const auto& [j, b] : f) {
-			if ((i & j)) {
-				ef[i & j] = a * b;
-			}
-		}
-	}
-
-	return ef;
-}
+*/

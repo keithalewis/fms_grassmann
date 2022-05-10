@@ -32,3 +32,4 @@
 *.app
 /.vs/fms_grassmann/v17
 /x64/Debug
+/.vs
